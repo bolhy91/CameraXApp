@@ -1,14 +1,18 @@
 package com.bolhy91.cameraxapp
 
 import android.Manifest
+import android.content.ContentValues
 import android.content.pm.PackageManager
+import android.media.Image
 import android.os.Build
 import androidx.appcompat.app.AppCompatActivity
 import android.os.Bundle
+import android.provider.MediaStore
 import android.util.Log
 import android.widget.Toast
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageCapture
+import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.video.VideoCapture
@@ -17,6 +21,8 @@ import androidx.camera.video.Recording
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.bolhy91.cameraxapp.databinding.ActivityMainBinding
+import java.text.SimpleDateFormat
+import java.util.*
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
@@ -57,7 +63,41 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun takePhoto() {
-        TODO("Not yet implemented")
+        // Get a stable reference of the modifiable image capture use case
+        val imageCapture = imageCapture ?: return
+
+        // create time stamped name and mediastore entry
+        val name = SimpleDateFormat(FILENAME_FORMAT, Locale.US)
+            .format(System.currentTimeMillis())
+        val contentValues = ContentValues().apply {
+            put(MediaStore.MediaColumns.DISPLAY_NAME, name)
+            put(MediaStore.MediaColumns.MIME_TYPE, "image/jpeg")
+            if (Build.VERSION.SDK_INT > Build.VERSION_CODES.P) {
+                put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/CameraX-Image")
+            }
+        }
+        // Create output options object which contains file + metadata
+        val outoputOptions = ImageCapture.OutputFileOptions
+            .Builder(contentResolver, MediaStore.Images.Media.EXTERNAL_CONTENT_URI, contentValues)
+            .build()
+        // Set up image capture listener, which is triggered after photo has
+        // been taken
+        imageCapture.takePicture(
+            outoputOptions,
+            ContextCompat.getMainExecutor(this),
+            object : ImageCapture.OnImageSavedCallback {
+                override fun onError(exception: ImageCaptureException) {
+                    Log.e(TAG, "Photo capture failed: ${exception.message}", exception)
+                }
+
+                override fun onImageSaved(outputFileResults: ImageCapture.OutputFileResults) {
+                    val msg = "Photo capture success: ${outputFileResults.savedUri}"
+                    Toast.makeText(baseContext, msg, Toast.LENGTH_LONG).show()
+                    Log.d(TAG, msg)
+                }
+            }
+        )
+
     }
 
     private fun startCamera() {
@@ -71,6 +111,9 @@ class MainActivity : AppCompatActivity() {
                 .also {
                     it.setSurfaceProvider(viewBinding.viewFinder.surfaceProvider)
                 }
+
+            imageCapture = ImageCapture.Builder().build()
+
             // select back camera as a default
             val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
             try {
@@ -78,13 +121,14 @@ class MainActivity : AppCompatActivity() {
                 cameraProvider.unbindAll()
                 // Bind use cases to camera
                 cameraProvider.bindToLifecycle(
-                    this, cameraSelector, preview
+                    this, cameraSelector, preview, imageCapture
                 )
             } catch (e: Exception) {
                 Log.e(TAG, "Use case binding failed", e)
             }
 
         }, ContextCompat.getMainExecutor(this))
+
     }
 
     private fun allPermissionsGranted() = REQUIRED_PERMISSIONS.all {
