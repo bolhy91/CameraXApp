@@ -1,6 +1,7 @@
 package com.bolhy91.cameraxapp
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.content.ContentValues
 import android.content.pm.PackageManager
 import android.media.Image
@@ -9,8 +10,14 @@ import androidx.appcompat.app.AppCompatActivity
 import android.os.Bundle
 import android.provider.MediaStore
 import android.util.Log
+import android.util.Rational
+import android.view.KeyEvent
+import android.view.KeyEvent.KEYCODE_VOLUME_DOWN
+import android.view.Surface
 import android.widget.Toast
+import androidx.camera.camera2.internal.compat.workaround.TargetAspectRatio.RATIO_16_9
 import androidx.camera.core.*
+import androidx.camera.core.ImageCapture.FLASH_MODE_ON
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.video.*
 import androidx.camera.video.VideoCapture
@@ -34,6 +41,10 @@ class MainActivity : AppCompatActivity() {
     private var recording: Recording? = null
 
     private lateinit var cameraExecutor: ExecutorService
+
+    private var cameraControl: CameraControl? = null
+    private var cameraInfo: CameraInfo? = null
+    private var linearZoom = 0f
 
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -85,14 +96,16 @@ class MainActivity : AppCompatActivity() {
         recording = videoCapture.output
             .prepareRecording(this, mediaStoreOutputOptions)
             .apply {
-                if (PermissionChecker.checkSelfPermission(this@MainActivity,
-                        Manifest.permission.RECORD_AUDIO) ==
-                    PermissionChecker.PERMISSION_GRANTED)
-                {
+                if (PermissionChecker.checkSelfPermission(
+                        this@MainActivity,
+                        Manifest.permission.RECORD_AUDIO
+                    ) ==
+                    PermissionChecker.PERMISSION_GRANTED
+                ) {
                     withAudioEnabled()
                 }
             }.start(ContextCompat.getMainExecutor(this)) { recordEvent ->
-                when(recordEvent) {
+                when (recordEvent) {
                     is VideoRecordEvent.Start -> {
                         viewBinding.videoCaptureButton.apply {
                             text = getString(R.string.stop_capture)
@@ -101,14 +114,17 @@ class MainActivity : AppCompatActivity() {
                     }
                     is VideoRecordEvent.Finalize -> {
                         if (!recordEvent.hasError()) {
-                            val msg = "Video capture success: ${recordEvent.outputResults.outputUri}"
+                            val msg =
+                                "Video capture success: ${recordEvent.outputResults.outputUri}"
                             Toast.makeText(baseContext, msg, Toast.LENGTH_LONG).show()
                             Log.d(TAG, msg)
                         } else {
                             recording?.close()
                             recording = null
-                            Log.e(TAG, "Video capture ends with error: " +
-                                    "${recordEvent.error}")
+                            Log.e(
+                                TAG, "Video capture ends with error: " +
+                                        "${recordEvent.error}"
+                            )
                         }
                         viewBinding.videoCaptureButton.apply {
                             text = getString(R.string.start_capture)
@@ -170,13 +186,31 @@ class MainActivity : AppCompatActivity() {
                     it.setSurfaceProvider(viewBinding.viewFinder.surfaceProvider)
                 }
 
-            imageCapture = ImageCapture.Builder().build()
+            imageCapture = ImageCapture.Builder().apply {
+                setTargetAspectRatio(AspectRatio.RATIO_16_9)
+                setFlashMode(FLASH_MODE_ON)
+            }
+                .build()
 
             val recorder = Recorder.Builder()
-                .setQualitySelector(QualitySelector.from(Quality.HIGHEST,
-                FallbackStrategy.higherQualityOrLowerThan(Quality.SD)))
+                .setQualitySelector(
+                    QualitySelector.from(
+                        Quality.HIGHEST,
+                        FallbackStrategy.higherQualityOrLowerThan(Quality.SD)
+                    )
+                )
                 .build()
             videoCapture = VideoCapture.withOutput(recorder)
+
+
+            // EXAMPLE USE VIEWPORT
+            val viewPort = ViewPort.Builder(Rational(100, 100), Surface.ROTATION_180).build()
+            val useCaseGroup = UseCaseGroup.Builder()
+                .addUseCase(preview)
+                .addUseCase(imageCapture!!)
+                .addUseCase(videoCapture!!)
+                .setViewPort(viewPort)
+                .build()
 
 
 //            val imageAnalyzer = ImageAnalysis.Builder()
@@ -193,9 +227,16 @@ class MainActivity : AppCompatActivity() {
                 // Unbind use cases before rebinding
                 cameraProvider.unbindAll()
                 // Bind use cases to camera
-                cameraProvider.bindToLifecycle(
-                    this, cameraSelector, preview, imageCapture, videoCapture
+                val camera = cameraProvider.bindToLifecycle(
+                    this, cameraSelector, useCaseGroup
                 )
+
+                cameraInfo = camera.cameraInfo
+                cameraControl = camera.cameraControl
+                cameraControl.also {
+                    cameraInfo?.zoomState?.value?.let { it1 -> it?.setZoomRatio(it1.minZoomRatio) }
+                }
+
             } catch (e: Exception) {
                 Log.e(TAG, "Use case binding failed", e)
             }
@@ -233,6 +274,26 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         super.onDestroy()
         cameraExecutor.shutdown()
+    }
+
+    override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
+        return when (keyCode) {
+            KeyEvent.KEYCODE_VOLUME_UP -> {
+                if (linearZoom <= 0.9) {
+                    linearZoom += 0.1f
+                }
+                cameraControl?.setLinearZoom(linearZoom)
+                true
+            }
+            KEYCODE_VOLUME_DOWN -> {
+                if (linearZoom >= 0.1) {
+                    linearZoom -= 0.1f
+                }
+                cameraControl?.setLinearZoom(linearZoom)
+                true
+            }
+            else -> super.onKeyDown(keyCode, event)
+        }
     }
 
     companion object {
